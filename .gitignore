@@ -1,2 +1,2 @@
-*.root 
-*.txt
+cluster_analysis/dominik_plots/*.root 
+cluster_analysis/*.txt
