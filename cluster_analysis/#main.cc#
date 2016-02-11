@@ -1,0 +1,200 @@
+#include "DataManager.h"
+#include <TSystem.h>
+#include <TApplication.h>
+#include <iostream>
+
+//from BOOST
+#include "boost/program_options.hpp"
+#include <boost/filesystem.hpp>
+
+namespace fs = boost::filesystem;
+
+namespace po = boost::program_options;
+
+
+struct config{
+  std::string arg_pathToList;      /* -l option */
+  std::string arg_position;      /* -c option */
+  bool arg_perEventDisplay;      /* -d option */
+};
+
+int parseOptions(config &c, int argc, char *argv[]){
+  // declare options
+  po::options_description desc("Allowed options") ;
+  desc.add_options()
+    ("help,h", "show this help")
+    ("l", po::value<std::string>(&c.arg_pathToList), ".txt file with run number list")
+    ("c", po::value<std::string>(&c.arg_position), "position along the mat in x direction (0-3 for lab, 5-8for testbeam)")
+    ("d", po::bool_switch(&c.arg_perEventDisplay), "per event display?")
+    ;
+
+  // actually do the parsing
+  po::variables_map vm;
+  po::store(po::parse_command_line(argc, argv, desc), vm);
+  po::notify(vm);
+
+  // show help and exit
+  if ((vm.count("help"))) {
+    std::cout << desc << "\n";
+    std::cout << "run with: ./cluster_analysis --l <fileList>.txt --c <position> --d(for perEventDisplay) <uplink1> <uplink2> \n";
+    std::cout << "example: ./cluster_analysis --l first_file.txt --c 0 33 34 \n";
+    return 1;
+  }
+
+
+  return 0;
+}
+
+
+void GetRunNumbers(std::string listName, int &nFiles, std::vector<long> &pedestalRunNumbers, std::vector<long> &gainRunNumbers, std::vector<long> &dataRunNumbers){
+
+  std::ifstream inputFile;
+
+
+  int nlines = 0;
+  long ped, gain, data;
+
+  inputFile.open(Form(listName.c_str()));
+
+  while (inputFile) {
+
+         inputFile >> ped >> gain >> data;
+
+         pedestalRunNumbers.push_back(ped);
+         gainRunNumbers.push_back(gain);
+         dataRunNumbers.push_back(data);
+
+         nlines++;
+
+  }
+
+  printf("Finished: I found %d entries\n",nlines);
+
+  nFiles = nlines -1;
+  
+  inputFile.close();
+
+}
+
+bool getFilenames(std::string folderName, int nFiles, const std::vector<long> pedestalRunNumbers, const std::vector<long> gainRunNumbers, const std::vector<long> dataRunNumbers, std::vector<std::string> &pedestalFileName, std::vector<std::string> &gainFileName, std::vector<std::string> &dataFileName)
+{
+
+   std::cout<< "testbeam folder = " << folderName.c_str() << std::endl;
+ 
+   for(int i = 0; i< nFiles; ++i){
+
+     std::string pedestal_temp = folderName + "btsoftware_" + std::to_string(pedestalRunNumbers.at(i)) + "_calib_dark_ntuple.root";
+     fs::path p(pedestal_temp.c_str());
+       if (!fs::is_regular_file(p)) {
+       std::cout<<"Could not find file"<< pedestal_temp.c_str()<< std::endl;
+       return false;       
+     }
+     pedestalFileName.push_back(pedestal_temp);     
+   
+     std::string gain_temp = folderName +"led_gain/btsoftware_" + std::to_string(gainRunNumbers.at(i)) + "_calib_led_gain_uplink";
+     gainFileName.push_back(gain_temp);
+
+     std::string data_temp = folderName + "btsoftware_" + std::to_string(dataRunNumbers.at(i)) + "_datarun_ntuple.root";
+     //std::string data_temp = folderName + "btsoftware_" + std::to_string(dataRunNumbers.at(i)) + "_calib_dark_ntuple.root";
+     fs::path f(data_temp.c_str());
+       if (!fs::is_regular_file(f)) {
+       std::cout<<"Could not find file"<< data_temp.c_str()<< std::endl;
+       return false;       
+     }
+     dataFileName.push_back(data_temp);
+
+   }
+
+   return true;
+
+}
+
+bool checkGainFiles(int nFiles, const std::vector<std::string> gainFileName, std::vector<int> uplinkIds)
+{
+
+  for(int i = 0; i< nFiles; ++i){
+     for(int j = 0; j< uplinkIds.size(); ++j){
+
+       std::string gain_temp = gainFileName.at(i) + std::to_string(uplinkIds.at(j)) + ".root";
+
+       fs::path g(gain_temp.c_str());
+       if (!fs::is_regular_file(g)) {
+          std::cout<<"Could not find file"<< gain_temp.c_str()<< std::endl;
+          return false;
+       }
+      }
+  }
+  return true;
+
+}
+
+int main(int argc, char** argv){
+
+    config cfg;
+    if (parseOptions(cfg, argc, argv)!= 0){
+      std::cerr << "Can not parse options!" << std::endl;
+      return 0;
+    }
+
+    int nUplinks = 0;
+    std::vector<int> uplinkIds;  
+    std::cout<<"These uplinkIds will be read out: " << std::endl;
+    for (int i = 5; i < argc; ++i) {
+
+     if(atoi(argv[i]) > 0){
+
+       uplinkIds.push_back(atoi(argv[i]));      
+       std::cout<< uplinkIds.at(nUplinks)<< std::endl;
+       nUplinks += 1;
+
+     }
+    }
+
+
+    TApplication myapp("myapp",0,0);
+
+    std::vector<long> pedestalRunNumbers;
+    std::vector<long> gainRunNumbers;
+    std::vector<long> dataRunNumbers;
+
+
+    int nFiles = 0;
+
+    GetRunNumbers(cfg.arg_pathToList.c_str(), nFiles, pedestalRunNumbers, gainRunNumbers, dataRunNumbers);
+
+
+    //DEFINE FOLDER with all the data!!!
+    std::string folderName;
+    folderName = "/home/scifi_testbeam14/radiatedModule/"; 
+    //folderName = "/home/scifi_testbeam14/data/testbeam2015Nov/"; 
+    
+
+    std::vector<std::string> pedestalFileNames;
+    std::vector<std::string> gainFileNames;
+    std::vector<std::string> dataFileNames;
+
+    // form strings with file names from the run numbers and check if files exist
+    if(!getFilenames(folderName, nFiles, pedestalRunNumbers, gainRunNumbers, dataRunNumbers, pedestalFileNames, gainFileNames, dataFileNames)) return 0;
+
+    //check if gain calibration files exist
+    if(!checkGainFiles(nFiles, gainFileNames, uplinkIds)) return 0;
+
+
+    DataManager dataManager(uplinkIds, true,std::stoi(cfg.arg_position));
+    for(int i = 0; i < nFiles -1; ++i) {
+      std::cout<<"" << std::endl;
+      std::cout<<"Files of line "<< i+1 << " of " << nFiles << std::endl;
+      dataManager.fillEvent(pedestalFileNames.at(i), gainFileNames.at(i), dataFileNames.at(i), std::to_string(dataRunNumbers.at(i)), cfg.arg_perEventDisplay, cfg.arg_position, false, pedestalRunNumbers[0]);
+    }
+    dataManager.fillEvent(pedestalFileNames.at(nFiles -1), gainFileNames.at(nFiles -1), dataFileNames.at(nFiles -1), cfg.arg_pathToList, cfg.arg_perEventDisplay, cfg.arg_position, true, pedestalRunNumbers[0]);
+
+    gSystem->ProcessEvents();
+    myapp.Run();
+    getchar();
+     //std::cin.get();
+    //  std::cout<<"sfsgs"<<std::endl;
+    return 0;
+
+}
+
+
